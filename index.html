@@ -1,0 +1,1732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIO Integrated Immunization Portal</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    
+    <!-- Leaflet for Mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- shpjs for parsing shapefiles -->
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // HTH Colors
+                        'hth-primary': '#1e3a8a',
+                        'hth-secondary': '#3b82f6',
+                        // SS Colors
+                        'ss-primary': '#0f766e', 
+                        'ss-secondary': '#14b8a6',
+                        'accent': '#f59e0b',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* Print Styles ensuring only the active app is printed beautifully */
+        @media print {
+            body, html { background-color: white !important; height: auto !important; overflow: visible !important; }
+            .no-print { display: none !important; }
+            
+            #app-container-hth.hidden, #app-container-ss.hidden { display: none !important; }
+            
+            #hth-dashboard-section, #ss-dashboard-section { 
+                display: block !important; 
+                height: auto !important; 
+                overflow: visible !important; 
+                padding: 0 !important; 
+            }
+            .max-w-7xl { max-width: 100% !important; margin: 0 !important; }
+            
+            .shadow-sm, .shadow-md, .shadow-lg { box-shadow: none !important; border: 1px solid #e5e7eb !important; }
+            
+            .page-break-inside-avoid { page-break-inside: avoid; margin-bottom: 1rem; }
+            
+            canvas { max-height: 250px !important; width: 100% !important; object-fit: contain; }
+            #hth-map, #ss-map { max-height: 350px !important; width: 100% !important; border: 1px solid #ccc; page-break-inside: avoid; }
+            
+            .table-container { 
+                max-height: none !important; 
+                height: auto !important; 
+                overflow: visible !important; 
+                border: none !important;
+            }
+            
+            .grid { display: grid !important; }
+        }
+        
+        .hth-loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        .ss-loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #14b8a6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        #hth-map, #ss-map { height: 350px; width: 100%; border-radius: 0.5rem; z-index: 1; }
+        .table-container { max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen flex flex-col overflow-hidden">
+
+    <!-- Global Integration Navbar -->
+    <nav class="bg-slate-800 text-white shadow-lg p-3 flex justify-between items-center no-print shrink-0 z-50">
+        <div class="flex items-center gap-3 ml-2">
+            <i class="fa-solid fa-layer-group text-2xl text-slate-300"></i>
+            <h1 class="text-xl font-bold tracking-wide">DIO Integrated Immunization Portal</h1>
+        </div>
+        <div class="flex gap-2 mr-2">
+            <button id="tab-hth" onclick="switchApp('hth')" class="nav-tab bg-blue-600 text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 border border-blue-500">
+                <i class="fa-solid fa-house-medical mr-2"></i> House-to-House (HTH) Tool
+            </button>
+            <button id="tab-ss" onclick="switchApp('ss')" class="nav-tab bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 hover:bg-teal-600 border border-slate-600">
+                <i class="fa-solid fa-hospital-user mr-2"></i> Session Site Tool
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========================================== -->
+    <!-- HTH APP CONTAINER                          -->
+    <!-- ========================================== -->
+    <div id="app-container-hth" class="flex-grow flex flex-col overflow-hidden">
+        <!-- Navbar -->
+        <nav class="bg-hth-primary text-white shadow-md p-4 flex justify-between items-center no-print shrink-0">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-shield-virus text-2xl"></i>
+                <h1 class="text-xl font-bold tracking-wide">Immunization Monitoring Dashboard <span class="text-sm font-normal text-blue-200">| DIO Report Generator</span></h1>
+            </div>
+            <button id="hth-printBtn" class="hidden bg-white text-hth-primary px-4 py-2 rounded-md font-semibold hover:bg-gray-100 transition shadow">
+                <i class="fa-solid fa-file-pdf mr-2"></i> Export / Print
+            </button>
+        </nav>
+
+        <!-- Upload Section -->
+        <div id="hth-upload-section" class="flex-grow flex items-center justify-center p-6 no-print overflow-y-auto">
+            <div class="bg-white p-10 rounded-xl shadow-lg max-w-lg w-full text-center border border-gray-100">
+                <div class="bg-blue-50 text-blue-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <i class="fa-solid fa-file-csv text-4xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold mb-2 text-gray-800">Upload Kobo Data</h2>
+                <p class="text-gray-500 mb-8">Select your exported <b>House to House Data CSV</b> file to generate the dashboard.</p>
+                
+                <label class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition shadow-md w-full block">
+                    <i class="fa-solid fa-upload mr-2"></i> Select CSV File
+                    <input type="file" id="hth-csvFileInput" accept=".csv" class="hidden">
+                </label>
+                
+                <div id="hth-loading-indicator" class="hidden mt-6">
+                    <div class="hth-loader mb-2"></div>
+                    <p class="text-sm text-gray-500">Processing Data (Calculating Agewise Status)...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Section -->
+        <div id="hth-dashboard-section" class="hidden flex-grow overflow-y-auto p-4 md:p-6 w-full">
+            <div class="max-w-7xl mx-auto space-y-6">
+                <!-- Filters -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 no-print">
+                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4"><i class="fa-solid fa-filter mr-1"></i> Report Filters</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">State</label>
+                            <select id="hth-filter-state" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-blue-500 focus:border-blue-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">District</label>
+                            <select id="hth-filter-district" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-blue-500 focus:border-blue-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">UPHC</label>
+                            <select id="hth-filter-uphc" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-blue-500 focus:border-blue-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                            <input type="date" id="hth-filter-date-start" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+                            <input type="date" id="hth-filter-date-end" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Print Header -->
+                <div class="border-b-2 border-hth-primary pb-4 mb-4 mt-4">
+                    <h2 class="text-2xl font-bold text-gray-900" id="hth-report-title">UPHC Executive Summary</h2>
+                    <p class="text-gray-500 text-sm mt-1" id="hth-report-subtitle">Generating stats based on calculated age logic...</p>
+                </div>
+
+                <!-- Core KPIs Grid -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-blue-500 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">Total HH Monitored</p>
+                        <p class="text-3xl font-bold text-gray-900 mt-1" id="hth-kpi-total">-</p>
+                    </div>
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-green-500 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">Calculated Fully Vaccinated (All)</p>
+                        <p class="text-3xl font-bold text-green-600 mt-1" id="hth-kpi-fully">-</p>
+                    </div>
+                     <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-orange-500 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">Calculated Partial Vaccinated</p>
+                        <p class="text-3xl font-bold text-orange-500 mt-1" id="hth-kpi-partial">-</p>
+                    </div>
+                     <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-indigo-500 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">FIC Coverage (>= 9 Months)</p>
+                        <p class="text-3xl font-bold text-indigo-600 mt-1" id="hth-kpi-fic">-</p>
+                        <p class="text-xs text-indigo-700 mt-1 font-medium" id="hth-kpi-fic-subtext"></p>
+                    </div>
+                </div>
+
+                <!-- Target Antigens & Dropouts -->
+                <h3 class="text-lg font-semibold text-gray-800 mt-6 border-b pb-2 text-red-700 border-red-200 page-break-inside-avoid">
+                    <i class="fa-solid fa-triangle-exclamation mr-1"></i> Dropouts & Target Antigens (Calculated)
+                </h3>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="bg-red-50 p-4 rounded-lg shadow-sm border border-red-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-red-800">Total Zero & Pot. Zero Dose</p>
+                        <p class="text-2xl font-bold text-red-600 mt-1" id="hth-kpi-zero-dose">-</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">MR-1 Coverage (> 9mo)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="hth-kpi-mr1-cov">-</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">MR-2 Coverage (> 16mo)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="hth-kpi-mr2-cov">-</p>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg shadow-sm border border-orange-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-orange-800">Dropout: Penta-1 to MR-1</p>
+                        <p class="text-2xl font-bold text-orange-600 mt-1" id="hth-kpi-dropout-p1-m1">-</p>
+                        <p class="text-xs text-orange-700 mt-1 font-medium" id="hth-kpi-dropout-p1-m1-rate"></p>
+                    </div>
+                    <div class="bg-yellow-50 p-4 rounded-lg shadow-sm border border-yellow-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-yellow-800">Dropout: Penta-1 to Penta-3</p>
+                        <p class="text-2xl font-bold text-yellow-600 mt-1" id="hth-kpi-dropout-m1-m2">-</p>
+                        <p class="text-xs text-yellow-700 mt-1 font-medium" id="hth-kpi-dropout-m1-m2-rate"></p>
+                    </div>
+                </div>
+
+                <!-- Geospatial Map Row -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid mt-6">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-2 gap-2">
+                        <h3 class="text-lg font-semibold text-gray-800">
+                            <i class="fa-solid fa-map-location-dot mr-1 text-green-600"></i> Geographical Distribution (HTH)
+                        </h3>
+                        <label class="cursor-pointer bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 text-xs font-medium py-1.5 px-3 rounded transition shadow-sm no-print">
+                            <i class="fa-solid fa-layer-group mr-1"></i> Overlay UPHC Shapefile (.zip)
+                            <input type="file" id="hth-shpFileInput" accept=".zip" class="hidden">
+                        </label>
+                    </div>
+                    <div id="hth-map" class="border border-gray-300"></div>
+                    <p class="text-xs text-gray-500 mt-2"><i class="fa-solid fa-circle-info mr-1"></i> Dots represent monitored households based on <b>calculated</b> status. 🟢 Fully, 🟠 Partial, 🔴 Zero Dose, 🟣 Suspected MR. Upload a zipped shapefile (.shp, .dbf, .shx inside a .zip) to view boundary overlays.</p>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">Calculated Agewise Status Breakdown</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="hth-vaccinationChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">FIC Breakdown (>= 9 Months)</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="hth-ficChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vulnerable Children Line Listing Data Table -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid mt-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 text-red-700">
+                        <i class="fa-solid fa-clipboard-list mr-1"></i> Line Listing: Vulnerable Children (Calculated Dropouts & Zero Dose)
+                    </h3>
+                    <div class="table-container border rounded">
+                        <table class="min-w-full divide-y divide-gray-200 text-xs">
+                            <thead class="bg-gray-100 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Child Name</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Caregiver</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Ward/Mohalla</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Age (Mo)</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Vulnerability Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hth-vulnerable-table-body" class="bg-white divide-y divide-gray-200">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- SESSION SITE APP CONTAINER                 -->
+    <!-- ========================================== -->
+    <div id="app-container-ss" class="flex-grow flex flex-col overflow-hidden hidden">
+        <!-- Navbar -->
+        <nav class="bg-ss-primary text-white shadow-md p-4 flex justify-between items-center no-print shrink-0">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-hospital-user text-2xl"></i>
+                <h1 class="text-xl font-bold tracking-wide">Session Site Monitoring <span class="text-sm font-normal text-teal-200">| DIO Report Generator</span></h1>
+            </div>
+            <button id="ss-printBtn" class="hidden bg-white text-ss-primary px-4 py-2 rounded-md font-semibold hover:bg-gray-100 transition shadow">
+                <i class="fa-solid fa-file-pdf mr-2"></i> Export / Print
+            </button>
+        </nav>
+
+        <!-- Upload Section -->
+        <div id="ss-upload-section" class="flex-grow flex items-center justify-center p-6 no-print overflow-y-auto">
+            <div class="bg-white p-10 rounded-xl shadow-lg max-w-lg w-full text-center border border-gray-100">
+                <div class="bg-teal-50 text-teal-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <i class="fa-solid fa-file-csv text-4xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold mb-2 text-gray-800">Upload Session Site Data</h2>
+                <p class="text-gray-500 mb-8">Select your exported <b>Session Site Monitoring CSV</b> file.</p>
+                
+                <label class="cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-medium py-3 px-6 rounded-lg transition shadow-md w-full block">
+                    <i class="fa-solid fa-upload mr-2"></i> Select CSV File
+                    <input type="file" id="ss-csvFileInput" accept=".csv" class="hidden">
+                </label>
+                
+                <div id="ss-loading-indicator" class="hidden mt-6">
+                    <div class="ss-loader mb-2"></div>
+                    <p class="text-sm text-gray-500">Processing Comprehensive KPIs...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Section -->
+        <div id="ss-dashboard-section" class="hidden flex-grow overflow-y-auto p-4 md:p-6 w-full">
+            <div class="max-w-7xl mx-auto space-y-6">
+                <!-- Filters -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 no-print">
+                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4"><i class="fa-solid fa-filter mr-1"></i> Report Filters</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">State</label>
+                            <select id="ss-filter-state" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-teal-500 focus:border-teal-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">District</label>
+                            <select id="ss-filter-district" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-teal-500 focus:border-teal-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">UPHC/UCHC</label>
+                            <select id="ss-filter-uphc" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-teal-500 focus:border-teal-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                            <input type="date" id="ss-filter-date-start" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-teal-500 focus:border-teal-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+                            <input type="date" id="ss-filter-date-end" class="w-full text-sm border-gray-300 rounded-md shadow-sm border p-2 focus:ring-teal-500 focus:border-teal-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Print Header -->
+                <div class="border-b-2 border-ss-primary pb-4 mb-4 mt-4">
+                    <h2 class="text-2xl font-bold text-gray-900" id="ss-report-title">Session Site Executive Summary</h2>
+                    <p class="text-gray-500 text-sm mt-1" id="ss-report-subtitle">Generating stats...</p>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-teal-600 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">Total Sessions Monitored</p>
+                        <p class="text-3xl font-bold text-gray-900 mt-1" id="ss-kpi-total">-</p>
+                    </div>
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 border-l-4 border-l-green-500 page-break-inside-avoid">
+                        <p class="text-sm font-medium text-gray-500">Sessions Held</p>
+                        <p class="text-3xl font-bold text-green-600 mt-1" id="ss-kpi-held">-</p>
+                    </div>
+                </div>
+
+                <!-- SECTION 1 -->
+                <h3 class="text-lg font-semibold text-gray-800 mt-6 border-b pb-2 text-blue-700 border-blue-200 page-break-inside-avoid">
+                    <i class="fa-solid fa-list-check mr-1"></i> Planning, Supervision, and Execution
+                </h3>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">Session Adherence (Outreach)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="ss-kpi-adherence">-</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">Supervisor Visits (Outreach)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="ss-kpi-sup-visit">-</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">MOIC Visits (Outreach)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="ss-kpi-moic-visit">-</p>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg shadow-sm border border-red-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-red-800">No Mobilizer (Outreach)</p>
+                        <p class="text-2xl font-bold text-red-600 mt-1" id="ss-kpi-no-mob">-</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg shadow-sm border border-blue-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-blue-800">Vaccine via AVD (Outreach)</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1" id="ss-kpi-avd">-</p>
+                    </div>
+                </div>
+
+                <!-- SECTION 2 -->
+                <h3 class="text-lg font-semibold text-gray-800 mt-6 border-b pb-2 text-purple-700 border-purple-200 page-break-inside-avoid">
+                    <i class="fa-solid fa-desktop mr-1"></i> Documentation and Digital Tracking
+                </h3>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="bg-purple-50 p-4 rounded-lg shadow-sm border border-purple-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-purple-800">Headcount Updated (Outreach)</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1" id="ss-kpi-headcount">-</p>
+                    </div>
+                    <div class="bg-purple-50 p-4 rounded-lg shadow-sm border border-purple-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-purple-800">Due Lists Updated (Outreach)</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1" id="ss-kpi-due-list">-</p>
+                    </div>
+                    <div class="bg-purple-50 p-4 rounded-lg shadow-sm border border-purple-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-purple-800">U-WIN Planning</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1" id="ss-kpi-uwin-plan">-</p>
+                    </div>
+                    <div class="bg-purple-50 p-4 rounded-lg shadow-sm border border-purple-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-purple-800">U-WIN Live Entry</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1" id="ss-kpi-uwin-live">-</p>
+                    </div>
+                    <div class="bg-purple-50 p-4 rounded-lg shadow-sm border border-purple-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-purple-800">TD-10/16 Tracking Mechanism</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1" id="ss-kpi-td-track">-</p>
+                    </div>
+                </div>
+
+                <!-- SECTION 3 -->
+                <h3 class="text-lg font-semibold text-gray-800 mt-6 border-b pb-2 text-orange-700 border-orange-200 page-break-inside-avoid">
+                    <i class="fa-solid fa-stethoscope mr-1"></i> Availability of Equipment and Supplies
+                </h3>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="bg-orange-50 p-4 rounded-lg shadow-sm border border-orange-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-orange-800">Basic Med Equip (Weighing + BP)</p>
+                        <p class="text-2xl font-bold text-orange-600 mt-1" id="ss-kpi-med-equip">-</p>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg shadow-sm border border-orange-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-orange-800">Functional Hub Cutter</p>
+                        <p class="text-2xl font-bold text-orange-600 mt-1" id="ss-kpi-hub-cutter">-</p>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg shadow-sm border border-orange-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-orange-800">Essential Supplies (Vit A + MCP)</p>
+                        <p class="text-2xl font-bold text-orange-600 mt-1" id="ss-kpi-supplies">-</p>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg shadow-sm border border-orange-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-orange-800">IEC Materials Displayed</p>
+                        <p class="text-2xl font-bold text-orange-600 mt-1" id="ss-kpi-iec">-</p>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg shadow-sm border border-red-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-red-800">Vaccine Unavailability (Any)</p>
+                        <p class="text-2xl font-bold text-red-600 mt-1" id="ss-kpi-vaccine-unavail">-</p>
+                    </div>
+                </div>
+
+                <!-- SECTION 4 -->
+                <h3 class="text-lg font-semibold text-gray-800 mt-6 border-b pb-2 text-green-700 border-green-200 page-break-inside-avoid">
+                    <i class="fa-solid fa-user-nurse mr-1"></i> ANM Knowledge and Additional Services
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-green-50 p-4 rounded-lg shadow-sm border border-green-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-green-800">ANC Services Conducted</p>
+                        <p class="text-2xl font-bold text-green-600 mt-1" id="ss-kpi-anc">-</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg shadow-sm border border-green-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-green-800">Knowledge: Correct Inj. Protocols</p>
+                        <p class="text-2xl font-bold text-green-600 mt-1" id="ss-kpi-inj-proto">-</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg shadow-sm border border-green-200 page-break-inside-avoid">
+                        <p class="text-xs font-medium text-green-800">Knowledge: MR Protocol & Suspect ID</p>
+                        <p class="text-2xl font-bold text-green-600 mt-1" id="ss-kpi-mr-proto">-</p>
+                    </div>
+                </div>
+
+                <!-- Geospatial Map Row -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid mt-6">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-2 gap-2">
+                        <h3 class="text-lg font-semibold text-gray-800">
+                            <i class="fa-solid fa-map-location-dot mr-1 text-teal-600"></i> Geographical Distribution (Session Sites)
+                        </h3>
+                        <label class="cursor-pointer bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 text-xs font-medium py-1.5 px-3 rounded transition shadow-sm no-print">
+                            <i class="fa-solid fa-layer-group mr-1"></i> Overlay Boundary Shapefile (.zip)
+                            <input type="file" id="ss-shpFileInput" accept=".zip" class="hidden">
+                        </label>
+                    </div>
+                    <div id="ss-map" class="border border-gray-300"></div>
+                    <p class="text-xs text-gray-500 mt-2"><i class="fa-solid fa-circle-info mr-1"></i> Dots represent monitored session sites. 🟢 Held (No Issues), 🟠 Held (Equipment/Protocol Issues), 🔴 Session Not Held.</p>
+                </div>
+
+                <!-- Category Chart Row -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">Session Site Categorization</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="ss-categoryChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">Mobilizer Availability (Outreach Only)</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="ss-mobilizerChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Line Listing Data Table -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 page-break-inside-avoid mt-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 text-red-700">
+                        <i class="fa-solid fa-clipboard-list mr-1"></i> Intervention Required: Sites with Issues & Vaccine Unavailability
+                    </h3>
+                    <div class="table-container border rounded">
+                        <table class="min-w-full divide-y divide-gray-200 text-xs">
+                            <thead class="bg-gray-100 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">UPHC / District</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Session Site & Ward</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">ANM Name</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600">Monitor Date</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-600 w-1/3">Identified Issues</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ss-warning-table-body" class="bg-white divide-y divide-gray-200">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Global Footer -->
+    <footer class="bg-slate-100 text-slate-600 text-xs py-3 px-6 shrink-0 border-t border-slate-200 print:bg-white print:text-gray-800 print:mt-6 print:pt-4 print:border-t-2 print:border-gray-300 flex flex-col sm:flex-row justify-between items-center gap-4 print:flex-row print:justify-between page-break-inside-avoid">
+        <div class="text-center sm:text-left font-medium">
+            Source: Kobo ODK Toolbox: House to House Survey and Session Site Supervision done by JSI Team.
+        </div>
+        <img src="image_791cac.png" alt="JSI India Logo" class="h-10 print:h-12 object-contain" onerror="this.style.display='none'">
+    </footer>
+
+    <!-- Scripts -->
+    <script>
+        // ==========================================
+        // GLOBAL APP SWITCHING LOGIC
+        // ==========================================
+        function switchApp(app) {
+            const hthTab = document.getElementById('tab-hth');
+            const ssTab = document.getElementById('tab-ss');
+            const hthApp = document.getElementById('app-container-hth');
+            const ssApp = document.getElementById('app-container-ss');
+
+            if (app === 'hth') {
+                hthApp.classList.remove('hidden');
+                ssApp.classList.add('hidden');
+                
+                hthTab.className = "nav-tab bg-blue-600 text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 border border-blue-500";
+                ssTab.className = "nav-tab bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 hover:bg-teal-600 border border-slate-600";
+                
+                if (window.hthMapInstance) setTimeout(() => window.hthMapInstance.invalidateSize(), 100);
+            } else {
+                ssApp.classList.remove('hidden');
+                hthApp.classList.add('hidden');
+                
+                ssTab.className = "nav-tab bg-teal-600 text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 border border-teal-500";
+                hthTab.className = "nav-tab bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-md font-semibold shadow transition-all duration-200 hover:bg-blue-600 border border-slate-600";
+                
+                if (window.ssMapInstance) setTimeout(() => window.ssMapInstance.invalidateSize(), 100);
+            }
+        }
+
+        // ==========================================
+        // MODULE 1: HTH TOOL LOGIC
+        // ==========================================
+        const initHTH = () => {
+            let rawData = [];
+            let filteredData = [];
+            let charts = {};
+            let map = null;
+            let markersLayer = null;
+            let shpLayer = null;
+
+            const uploadSection = document.getElementById('hth-upload-section');
+            const dashboardSection = document.getElementById('hth-dashboard-section');
+            const fileInput = document.getElementById('hth-csvFileInput');
+            const loadingIndicator = document.getElementById('hth-loading-indicator');
+            const printBtn = document.getElementById('hth-printBtn');
+            const shpFileInput = document.getElementById('hth-shpFileInput');
+
+            const selectState = document.getElementById('hth-filter-state');
+            const selectDistrict = document.getElementById('hth-filter-district');
+            const selectUphc = document.getElementById('hth-filter-uphc');
+            const inputDateStart = document.getElementById('hth-filter-date-start');
+            const inputDateEnd = document.getElementById('hth-filter-date-end');
+
+            fileInput.addEventListener('change', handleFileUpload);
+            selectState.addEventListener('change', () => { updateDropdowns('state'); applyFilters(); });
+            selectDistrict.addEventListener('change', () => { updateDropdowns('district'); applyFilters(); });
+            selectUphc.addEventListener('change', applyFilters);
+            inputDateStart.addEventListener('change', applyFilters);
+            inputDateEnd.addEventListener('change', applyFilters);
+            shpFileInput.addEventListener('change', handleShapefileUpload);
+
+            printBtn.addEventListener('click', () => {
+                if(map) { map.invalidateSize(true); }
+                setTimeout(() => { window.print(); }, 300);
+            });
+
+            function isReceived(row, baseCol) {
+                const yesNoCol = baseCol + '.1';
+                if (row[yesNoCol] !== undefined && row[yesNoCol] !== null && String(row[yesNoCol]).trim() !== '') {
+                    return String(row[yesNoCol]).trim().toLowerCase() === 'yes';
+                }
+                if (row[baseCol] !== undefined && row[baseCol] !== null && String(row[baseCol]).trim() !== '') {
+                    return true;
+                }
+                return false;
+            }
+
+            function calcAgeMonths(dobStr, monitorDateStr) {
+                if (!dobStr) return null;
+                const dob = new Date(dobStr);
+                const refDate = monitorDateStr ? new Date(monitorDateStr) : new Date(); 
+                if (isNaN(dob)) return null;
+                let months = (refDate.getFullYear() - dob.getFullYear()) * 12;
+                months -= dob.getMonth();
+                months += refDate.getMonth();
+                if (refDate.getDate() < dob.getDate()) months--;
+                return months >= 0 ? months : 0;
+            }
+
+            function calcAgeWeeks(dobStr, monitorDateStr) {
+                if (!dobStr) return null;
+                const dob = new Date(dobStr);
+                const refDate = monitorDateStr ? new Date(monitorDateStr) : new Date();
+                if (isNaN(dob)) return null;
+                const diffTime = Math.abs(refDate - dob);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                return Math.floor(diffDays / 7);
+            }
+
+            function calculateCustomStatus(row) {
+                const dobCol = 'B.12. DOB of child (to be filled from MCP card/or birth related records)';
+                const monitorDateCol = 'Date_of_Monitor';
+                
+                const ageMonths = calcAgeMonths(row[dobCol], row[monitorDateCol]);
+                row._calculated_age_months = ageMonths; 
+                row._calculated_age_weeks = calcAgeWeeks(row[dobCol], row[monitorDateCol]);
+                
+                if (ageMonths === null) return 'Unknown';
+
+                const pentaDptVars = ['Penta 1', 'Penta 2', 'Penta 3', 'DPT 1', 'DPT 2', 'DPT 3'];
+                let hasAnyPentaDpt = false;
+                for (let v of pentaDptVars) {
+                    if (isReceived(row, v)) {
+                        hasAnyPentaDpt = true;
+                        break;
+                    }
+                }
+                if (ageMonths >= 12 && !hasAnyPentaDpt) return 'Zero Dose';
+                if (ageMonths < 12 && !isReceived(row, 'Penta 1')) return 'Potential Zero Dose';
+
+                let required = [];
+                if (ageMonths < 1) required = ['BCG']; 
+                else if (ageMonths < 2) required = ['BCG', 'OPV 1', 'Penta 1', 'RVV 1', 'fIPV 1', 'PCV 1']; 
+                else if (ageMonths < 3) required = ['BCG', 'OPV 1', 'Penta 1', 'RVV 1', 'fIPV 1', 'PCV 1', 'OPV 2', 'Penta 2', 'RVV 2']; 
+                else if (ageMonths < 9) required = ['BCG', 'OPV 1', 'Penta 1', 'RVV 1', 'fIPV 1', 'PCV 1', 'OPV 2', 'Penta 2', 'RVV 2', 'OPV 3', 'Penta 3', 'RVV 3', 'fIPV 2', 'PCV 2']; 
+                else if (ageMonths < 16) required = ['BCG', 'OPV 1', 'Penta 1', 'RVV 1', 'fIPV 1', 'PCV 1', 'OPV 2', 'Penta 2', 'RVV 2', 'OPV 3', 'Penta 3', 'RVV 3', 'fIPV 2', 'PCV 2', 'MR 1', 'JE 1', 'PCV booster']; 
+                else required = ['BCG', 'OPV 1', 'Penta 1', 'RVV 1', 'fIPV 1', 'PCV 1', 'OPV 2', 'Penta 2', 'RVV 2', 'OPV 3', 'Penta 3', 'RVV 3', 'fIPV 2', 'PCV 2', 'MR 1', 'JE 1', 'PCV booster', 'MR 2', 'JE 2', 'DPT booster 1', 'OPV booster']; 
+
+                let isFully = true;
+                for (let v of required) {
+                    if (!isReceived(row, v)) {
+                        isFully = false;
+                        break;
+                    }
+                }
+                return isFully ? 'All' : 'Partial';
+            }
+
+            function handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                loadingIndicator.classList.remove('hidden');
+
+                Papa.parse(file, {
+                    header: false,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        if (results.data.length < 2) {
+                            alert("CSV seems empty or invalid.");
+                            loadingIndicator.classList.add('hidden');
+                            return;
+                        }
+
+                        const rawHeaders = results.data[0];
+                        const seen = {};
+                        const cleanHeaders = rawHeaders.map(h => {
+                            let base = h ? h.trim() : 'Unknown';
+                            if (seen[base]) {
+                                seen[base]++;
+                                return base + '.1';
+                            } else {
+                                seen[base] = 1;
+                                return base;
+                            }
+                        });
+
+                        rawData = [];
+                        for (let i = 1; i < results.data.length; i++) {
+                            let rowObj = {};
+                            for (let j = 0; j < cleanHeaders.length; j++) {
+                                rowObj[cleanHeaders[j]] = results.data[i][j];
+                            }
+                            rawData.push(rowObj);
+                        }
+
+                        rawData.forEach(row => {
+                            if (row['Date_of_Monitor']) row._parsedDate = new Date(row['Date_of_Monitor']);
+                            
+                            row._calc_status = calculateCustomStatus(row);
+                            
+                            row._has_fic = false;
+                            if (row._calculated_age_months >= 9) {
+                                row._has_fic = isReceived(row, 'BCG') && 
+                                               isReceived(row, 'OPV 1') && isReceived(row, 'OPV 2') && isReceived(row, 'OPV 3') &&
+                                               isReceived(row, 'Penta 1') && isReceived(row, 'Penta 2') && isReceived(row, 'Penta 3') &&
+                                               isReceived(row, 'MR 1');
+                            }
+                                           
+                            row._penta1 = isReceived(row, 'Penta 1');
+                            row._penta3 = isReceived(row, 'Penta 3');
+                            row._mr1 = isReceived(row, 'MR 1');
+                            row._mr2 = isReceived(row, 'MR 2');
+                        });
+
+                        loadingIndicator.classList.add('hidden');
+                        uploadSection.classList.add('hidden');
+                        dashboardSection.classList.remove('hidden');
+                        printBtn.classList.remove('hidden');
+
+                        initMap();
+                        initFilters();
+                        applyFilters();
+                    },
+                    error: function(err) {
+                        alert('Error parsing CSV file: ' + err.message);
+                        loadingIndicator.classList.add('hidden');
+                    }
+                });
+            }
+
+            function getUniqueValues(key, dataArray = rawData) {
+                const vals = dataArray.map(item => item[key]).filter(v => v && v.trim() !== '');
+                return [...new Set(vals)].sort();
+            }
+
+            function populateSelect(element, values, prependAll = true) {
+                element.innerHTML = '';
+                if (prependAll) {
+                    const opt = document.createElement('option');
+                    opt.value = 'ALL';
+                    opt.textContent = 'All';
+                    element.appendChild(opt);
+                }
+                values.forEach(val => {
+                    const opt = document.createElement('option');
+                    opt.value = val;
+                    opt.textContent = val;
+                    element.appendChild(opt);
+                });
+            }
+
+            function initFilters() {
+                const validDates = rawData.map(d => d._parsedDate).filter(d => !isNaN(d));
+                if (validDates.length > 0) {
+                    const minDate = new Date(Math.min(...validDates));
+                    const maxDate = new Date(Math.max(...validDates));
+                    inputDateStart.value = minDate.toISOString().split('T')[0];
+                    inputDateEnd.value = maxDate.toISOString().split('T')[0];
+                }
+
+                populateSelect(selectState, getUniqueValues('State'));
+                updateDropdowns('state');
+            }
+
+            function updateDropdowns(triggerLevel) {
+                const selectedState = selectState.value;
+                const selectedDistrict = selectDistrict.value;
+                let availableData = rawData;
+
+                if (triggerLevel === 'state') {
+                    if (selectedState !== 'ALL') availableData = rawData.filter(d => d['State'] === selectedState);
+                    populateSelect(selectDistrict, getUniqueValues('District', availableData));
+                    populateSelect(selectUphc, getUniqueValues('UPHC', availableData));
+                } 
+                else if (triggerLevel === 'district') {
+                    if (selectedState !== 'ALL') availableData = availableData.filter(d => d['State'] === selectedState);
+                    if (selectDistrict.value !== 'ALL') availableData = availableData.filter(d => d['District'] === selectDistrict.value);
+                    populateSelect(selectUphc, getUniqueValues('UPHC', availableData));
+                }
+            }
+
+            function applyFilters() {
+                const state = selectState.value;
+                const dist = selectDistrict.value;
+                const uphc = selectUphc.value;
+                
+                let startD = new Date(inputDateStart.value);
+                let endD = new Date(inputDateEnd.value);
+                endD.setHours(23,59,59,999);
+
+                filteredData = rawData.filter(row => {
+                    let match = true;
+                    if (state !== 'ALL' && row['State'] !== state) match = false;
+                    if (dist !== 'ALL' && row['District'] !== dist) match = false;
+                    if (uphc !== 'ALL' && row['UPHC'] !== uphc) match = false;
+                    
+                    if (row._parsedDate && !isNaN(row._parsedDate)) {
+                        if (row._parsedDate < startD || row._parsedDate > endD) match = false;
+                    }
+                    return match;
+                });
+
+                updateTitles(state, dist, uphc);
+                updateDashboard();
+            }
+
+            function updateTitles(state, dist, uphc) {
+                let title = "Overall Executive Summary";
+                if (uphc !== 'ALL') title = `UPHC Summary: ${uphc}`;
+                else if (dist !== 'ALL') title = `District Summary: ${dist}`;
+                else if (state !== 'ALL') title = `State Summary: ${state}`;
+                
+                document.getElementById('hth-report-title').textContent = title;
+                document.getElementById('hth-report-subtitle').textContent = `Based on ${filteredData.length} households monitored between ${inputDateStart.value} and ${inputDateEnd.value}`;
+            }
+
+            function updateDashboard() {
+                const total = filteredData.length;
+                document.getElementById('hth-kpi-total').textContent = total.toLocaleString();
+
+                let fullyVac = 0, partial = 0, zeroDose = 0, potentialZeroDose = 0;
+                let ficEligible = 0, ficAchieved = 0;
+                let mr1Eligible = 0, mr1Achieved = 0;
+                let mr2Eligible = 0, mr2Achieved = 0;
+                
+                let pentaToMr1Eligible = 0, pentaToMr1Count = 0; 
+                let penta1ToPenta3Eligible = 0, penta1ToPenta3Count = 0; 
+                
+                let mrSuspectCount = 0;
+
+                const vacCounts = { 'All': 0, 'Partial': 0, 'Zero Dose': 0, 'Potential Zero Dose': 0, 'Unknown': 0 };
+                const vulnerableChildren = [];
+
+                const nameCol = 'B.1. Name of the selected child';
+                const motherCol = 'B.2. Name of Father/Mother';
+                const wardCol = 'Ward_No';
+                const mohallaCol = 'Mohalla';
+
+                filteredData.forEach(row => {
+                    let vTypes = [];
+                    const age = row._calculated_age_months;
+                    const ageWeeks = row._calculated_age_weeks;
+
+                    const stat = row._calc_status;
+                    vacCounts[stat] = (vacCounts[stat] || 0) + 1;
+                    
+                    if (stat === 'All') fullyVac++;
+                    else if (stat === 'Partial') partial++;
+                    else if (stat === 'Zero Dose') {
+                        zeroDose++;
+                        vTypes.push("Zero Dose");
+                    }
+                    else if (stat === 'Potential Zero Dose') {
+                        potentialZeroDose++;
+                        vTypes.push("Pot. Zero Dose");
+                    }
+
+                    if (age >= 9) {
+                        ficEligible++;
+                        if (row._has_fic) ficAchieved++;
+                    }
+
+                    if (age >= 9) {
+                        mr1Eligible++;
+                        if (row._mr1) mr1Achieved++;
+
+                        if (row._penta1) {
+                            pentaToMr1Eligible++; 
+                            if (row._mr1) pentaToMr1Count++; 
+                            else vTypes.push("Dropout (P1->MR1)");
+                        }
+                    }
+
+                    if (ageWeeks >= 14) {
+                         if (row._penta1) {
+                            penta1ToPenta3Eligible++; 
+                            if (row._penta3) penta1ToPenta3Count++;
+                            else vTypes.push("Dropout (P1->P3)");
+                         }
+                    }
+
+                    if (age >= 16) {
+                        mr2Eligible++;
+                        if (row._mr2) mr2Achieved++;
+                    }
+
+                    if (row['J.6. Has this child ever suffered from MR?'] === 'Yes') {
+                        mrSuspectCount++;
+                        vTypes.push("MR Suspect");
+                    }
+
+                    if (vTypes.length > 0) {
+                        vulnerableChildren.push({
+                            name: row[nameCol] || 'N/A',
+                            caregiver: row[motherCol] || 'N/A',
+                            location: `Ward: ${row[wardCol] || '-'} / ${row[mohallaCol] || '-'}`,
+                            age: age !== null ? age : '-',
+                            types: vTypes.join(', '),
+                            lat: row['_Geo- tagging_latitude'],
+                            lng: row['_Geo- tagging_longitude'],
+                            status: stat,
+                            suspect: row['J.6. Has this child ever suffered from MR?'] === 'Yes'
+                        });
+                    }
+                });
+
+                const formatPctWithN = (num, den) => {
+                    const pct = den ? ((num/den)*100).toFixed(1) : '0.0';
+                    return `${pct}% <span class="text-lg font-medium opacity-75 ml-1">(n=${num}/${den})</span>`;
+                };
+
+                document.getElementById('hth-kpi-fully').innerHTML = formatPctWithN(fullyVac, total);
+                document.getElementById('hth-kpi-partial').innerHTML = formatPctWithN(partial, total);
+                
+                document.getElementById('hth-kpi-fic').innerHTML = formatPctWithN(ficAchieved, ficEligible);
+                document.getElementById('hth-kpi-fic-subtext').textContent = `Eligible cohort (>= 9mo)`;
+
+                document.getElementById('hth-kpi-zero-dose').textContent = (zeroDose + potentialZeroDose).toLocaleString();
+                
+                document.getElementById('hth-kpi-mr1-cov').innerHTML = formatPctWithN(mr1Achieved, mr1Eligible);
+                document.getElementById('hth-kpi-mr2-cov').innerHTML = formatPctWithN(mr2Achieved, mr2Eligible);
+
+                const p1m1Diff = pentaToMr1Eligible - pentaToMr1Count;
+                document.getElementById('hth-kpi-dropout-p1-m1').textContent = p1m1Diff.toLocaleString();
+                document.getElementById('hth-kpi-dropout-p1-m1-rate').textContent = `Rate: ${pentaToMr1Eligible ? ((p1m1Diff/pentaToMr1Eligible)*100).toFixed(1) : 0}% (n=${p1m1Diff}/${pentaToMr1Eligible})`;
+
+                const p1p3Diff = penta1ToPenta3Eligible - penta1ToPenta3Count;
+                document.getElementById('hth-kpi-dropout-m1-m2').textContent = p1p3Diff.toLocaleString();
+                document.getElementById('hth-kpi-dropout-m1-m2-rate').textContent = `Rate: ${penta1ToPenta3Eligible ? ((p1p3Diff/penta1ToPenta3Eligible)*100).toFixed(1) : 0}% (n=${p1p3Diff}/${penta1ToPenta3Eligible})`;
+
+                const vulnBody = document.getElementById('hth-vulnerable-table-body');
+                vulnBody.innerHTML = '';
+                
+                if (vulnerableChildren.length === 0) {
+                    vulnBody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-sm text-gray-500 italic text-center">No vulnerable children found in current selection.</td></tr>';
+                } else {
+                    vulnerableChildren.forEach(child => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td class="px-3 py-2 whitespace-nowrap font-medium text-gray-900">${child.name}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-500">${child.caregiver}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-500">${child.location}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-500 font-mono text-center">${child.age}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-red-600 font-semibold text-xs bg-red-50">${child.types}</td>
+                        `;
+                        vulnBody.appendChild(tr);
+                    });
+                }
+
+                renderChart('hth-vaccinationChart', 'doughnut', 
+                    ['All (NIS Agewise)', 'Partial', 'Zero Dose', 'Potential Zero Dose', 'Unknown Age'],
+                    [vacCounts['All'], vacCounts['Partial'], vacCounts['Zero Dose'], vacCounts['Potential Zero Dose'], vacCounts['Unknown']],
+                    ['#22c55e', '#f59e0b', '#ef4444', '#dc2626', '#94a3b8']
+                );
+
+                renderChart('hth-ficChart', 'pie',
+                    ['FIC Achieved', 'FIC Missed'],
+                    [ficAchieved, ficEligible - ficAchieved],
+                    ['#4f46e5', '#cbd5e1']
+                );
+
+                updateMap(vulnerableChildren);
+            }
+
+            function renderChart(canvasId, type, labels, data, colors) {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                if (charts[canvasId]) charts[canvasId].destroy();
+
+                charts[canvasId] = new Chart(ctx, {
+                    type: type,
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: colors,
+                            borderWidth: 1,
+                            borderColor: '#ffffff'
+                        }]
+                    },
+                    plugins: [ChartDataLabels],
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        plugins: {
+                            legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+                            datalabels: {
+                                color: '#ffffff',
+                                font: { weight: 'bold', size: 14 },
+                                formatter: (value) => { return value > 0 ? value : ''; }
+                            }
+                        }
+                    }
+                });
+            }
+
+            function initMap() {
+                if (!map) {
+                    map = L.map('hth-map').setView([20.5937, 78.9629], 5);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OpenStreetMap &copy; CARTO',
+                        subdomains: 'abcd', maxZoom: 20
+                    }).addTo(map);
+                    markersLayer = L.featureGroup().addTo(map);
+                    window.hthMapInstance = map;
+                    setTimeout(() => map.invalidateSize(), 300);
+                }
+            }
+
+            function updateMap(vulnerableChildren) {
+                if (!map || !markersLayer) return;
+                markersLayer.clearLayers();
+                
+                filteredData.forEach(row => {
+                    const latStr = row['_Geo- tagging_latitude'];
+                    const lngStr = row['_Geo- tagging_longitude'];
+                    
+                    if (latStr && lngStr) {
+                        const lat = parseFloat(latStr);
+                        const lng = parseFloat(lngStr);
+                        
+                        if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+                            
+                            const status = row._calc_status;
+                            const isSuspect = row['J.6. Has this child ever suffered from MR?'] === 'Yes';
+                            const isZero = status === 'Zero Dose';
+                            const isPotZero = status === 'Potential Zero Dose';
+                            
+                            let markerColor = '#94a3b8'; 
+                            let radius = 4;
+                            let zIndex = 0;
+                            
+                            if (isSuspect) { markerColor = '#9333ea'; radius = 7; zIndex = 1000; } 
+                            else if (isZero) { markerColor = '#dc2626'; radius = 6; zIndex = 600; } 
+                            else if (isPotZero) { markerColor = '#ef4444'; radius = 5; zIndex = 500; } 
+                            else if (status === 'Partial') markerColor = '#f59e0b'; 
+                            else if (status === 'All') markerColor = '#22c55e'; 
+
+                            const marker = L.circleMarker([lat, lng], {
+                                radius: radius,
+                                fillColor: markerColor,
+                                color: isSuspect || isZero || isPotZero ? '#000000' : '#ffffff',
+                                weight: isSuspect || isZero || isPotZero ? 2 : 1,
+                                opacity: 1,
+                                fillOpacity: isSuspect || isZero || isPotZero ? 1 : 0.7
+                            });
+
+                            marker.bindTooltip(`
+                                <div class="text-sm">
+                                    <b>Calc. Status:</b> ${status}<br>
+                                    <b>UPHC:</b> ${row['UPHC'] || 'N/A'}<br>
+                                    <b>Age:</b> ${row._calculated_age_months !== null ? row._calculated_age_months + ' mo' : 'Unknown'}<br>
+                                    ${isSuspect ? '<b class="text-purple-600">MR Suspect Case</b><br>' : ''}
+                                    ${isZero || isPotZero ? '<b class="text-red-600">ZERO DOSE</b><br>' : ''}
+                                </div>
+                            `);
+
+                            if(zIndex > 0) marker.bringToFront();
+                            markersLayer.addLayer(marker);
+                        }
+                    }
+                });
+
+                if (markersLayer.getLayers().length > 0) {
+                    map.fitBounds(markersLayer.getBounds(), { padding: [30, 30], maxZoom: 15 });
+                }
+            }
+
+            function handleShapefileUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+                if (!map) return alert("Map is not initialized yet.");
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    shp(e.target.result).then(function(geojson) {
+                        if (shpLayer) map.removeLayer(shpLayer);
+                        shpLayer = L.geoJSON(geojson, {
+                            style: function() {
+                                return { color: '#1e3a8a', weight: 2, opacity: 0.8, fillOpacity: 0.1, fillColor: '#3b82f6' };
+                            },
+                            onEachFeature: function(feature, layer) {
+                                if (feature.properties) {
+                                    const namePropKey = Object.keys(feature.properties).find(k => 
+                                        k.toLowerCase().includes('name') || k.toLowerCase().includes('uphc')
+                                    );
+                                    if (namePropKey && feature.properties[namePropKey]) {
+                                        layer.bindTooltip(`<b>Boundary:</b> ${feature.properties[namePropKey]}`, {sticky: true});
+                                    }
+                                }
+                            }
+                        }).addTo(map);
+                        map.fitBounds(shpLayer.getBounds());
+                    }).catch(function(err) {
+                        alert('Error loading shapefile: ' + err.message);
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+                event.target.value = ''; 
+            }
+        };
+
+        // Initialize Module 1
+        initHTH();
+
+
+        // ==========================================
+        // MODULE 2: SESSION SITE TOOL LOGIC
+        // ==========================================
+        const initSS = () => {
+            let rawData = [];
+            let filteredData = [];
+            let charts = {};
+            let map = null;
+            let markersLayer = null;
+            let shpLayer = null;
+
+            const uploadSection = document.getElementById('ss-upload-section');
+            const dashboardSection = document.getElementById('ss-dashboard-section');
+            const fileInput = document.getElementById('ss-csvFileInput');
+            const loadingIndicator = document.getElementById('ss-loading-indicator');
+            const printBtn = document.getElementById('ss-printBtn');
+            const shpFileInput = document.getElementById('ss-shpFileInput');
+
+            const selectState = document.getElementById('ss-filter-state');
+            const selectDistrict = document.getElementById('ss-filter-district');
+            const selectUphc = document.getElementById('ss-filter-uphc');
+            const inputDateStart = document.getElementById('ss-filter-date-start');
+            const inputDateEnd = document.getElementById('ss-filter-date-end');
+
+            fileInput.addEventListener('change', handleFileUpload);
+            selectState.addEventListener('change', () => { updateDropdowns('state'); applyFilters(); });
+            selectDistrict.addEventListener('change', () => { updateDropdowns('district'); applyFilters(); });
+            selectUphc.addEventListener('change', applyFilters);
+            inputDateStart.addEventListener('change', applyFilters);
+            inputDateEnd.addEventListener('change', applyFilters);
+            shpFileInput.addEventListener('change', handleShapefileUpload);
+
+            printBtn.addEventListener('click', () => {
+                if(map) map.invalidateSize(true);
+                setTimeout(() => window.print(), 300);
+            });
+
+            function isYes(val) {
+                if (!val) return false;
+                return String(val).trim().toLowerCase().startsWith('yes');
+            }
+
+            function getVal(row, searchStr) {
+                if (!row || !searchStr) return null;
+                const key = Object.keys(row).find(k => k.toLowerCase().includes(searchStr.toLowerCase()));
+                if (!key) return null;
+                let s = String(row[key]).trim();
+                if (s === '' || s.toLowerCase() === 'na') return null;
+                return s;
+            }
+
+            function handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                loadingIndicator.classList.remove('hidden');
+
+                Papa.parse(file, {
+                    header: false, 
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        if (results.data.length < 2) {
+                            alert("CSV seems empty or invalid.");
+                            loadingIndicator.classList.add('hidden');
+                            return;
+                        }
+
+                        const rawHeaders = results.data[0];
+                        const seen = {};
+                        const cleanHeaders = rawHeaders.map(h => {
+                            let base = h ? h.trim() : 'Unknown';
+                            if (seen[base]) {
+                                seen[base]++;
+                                return base + '.' + seen[base]; 
+                            } else {
+                                seen[base] = 1;
+                                return base;
+                            }
+                        });
+
+                        rawData = [];
+                        for (let i = 1; i < results.data.length; i++) {
+                            let rowObj = {};
+                            for (let j = 0; j < cleanHeaders.length; j++) {
+                                rowObj[cleanHeaders[j]] = results.data[i][j];
+                            }
+                            rawData.push(rowObj);
+                        }
+
+                        rawData.forEach(row => {
+                            if (row['A.16. Date of visit (YYYY-MM-DD)']) {
+                                row._parsedDate = new Date(row['A.16. Date of visit (YYYY-MM-DD)']);
+                            }
+                        });
+
+                        loadingIndicator.classList.add('hidden');
+                        uploadSection.classList.add('hidden');
+                        dashboardSection.classList.remove('hidden');
+                        printBtn.classList.remove('hidden');
+
+                        initMap();
+                        initFilters();
+                        applyFilters();
+                    },
+                    error: function(err) {
+                        alert('Error parsing CSV file: ' + err.message);
+                        loadingIndicator.classList.add('hidden');
+                    }
+                });
+            }
+
+            function getUniqueValues(key, dataArray = rawData) {
+                const vals = dataArray.map(item => item[key]).filter(v => v && v.trim() !== '');
+                return [...new Set(vals)].sort();
+            }
+
+            function populateSelect(element, values) {
+                element.innerHTML = '<option value="ALL">All</option>';
+                values.forEach(val => {
+                    element.innerHTML += `<option value="${val}">${val}</option>`;
+                });
+            }
+
+            function initFilters() {
+                const validDates = rawData.map(d => d._parsedDate).filter(d => !isNaN(d));
+                if (validDates.length > 0) {
+                    const minDate = new Date(Math.min(...validDates));
+                    const maxDate = new Date(Math.max(...validDates));
+                    inputDateStart.value = minDate.toISOString().split('T')[0];
+                    inputDateEnd.value = maxDate.toISOString().split('T')[0];
+                }
+
+                populateSelect(selectState, getUniqueValues('A.1. Name of the State'));
+                updateDropdowns('state');
+            }
+
+            function updateDropdowns(triggerLevel) {
+                const stateVal = selectState.value;
+                const distVal = selectDistrict.value;
+                let availableData = rawData;
+
+                if (triggerLevel === 'state') {
+                    if (stateVal !== 'ALL') availableData = rawData.filter(d => d['A.1. Name of the State'] === stateVal);
+                    populateSelect(selectDistrict, getUniqueValues('A.2. Name of the District', availableData));
+                    populateSelect(selectUphc, getUniqueValues('A.4. Name of UPHC/UCHC', availableData));
+                } 
+                else if (triggerLevel === 'district') {
+                    if (stateVal !== 'ALL') availableData = availableData.filter(d => d['A.1. Name of the State'] === stateVal);
+                    if (distVal !== 'ALL') availableData = availableData.filter(d => d['A.2. Name of the District'] === distVal);
+                    populateSelect(selectUphc, getUniqueValues('A.4. Name of UPHC/UCHC', availableData));
+                }
+            }
+
+            function applyFilters() {
+                const state = selectState.value;
+                const dist = selectDistrict.value;
+                const uphc = selectUphc.value;
+                
+                let startD = new Date(inputDateStart.value);
+                let endD = new Date(inputDateEnd.value);
+                endD.setHours(23,59,59,999);
+
+                filteredData = rawData.filter(row => {
+                    let match = true;
+                    if (state !== 'ALL' && row['A.1. Name of the State'] !== state) match = false;
+                    if (dist !== 'ALL' && row['A.2. Name of the District'] !== dist) match = false;
+                    if (uphc !== 'ALL' && row['A.4. Name of UPHC/UCHC'] !== uphc) match = false;
+                    
+                    if (row._parsedDate && !isNaN(row._parsedDate)) {
+                        if (row._parsedDate < startD || row._parsedDate > endD) match = false;
+                    }
+                    return match;
+                });
+
+                updateTitles(state, dist, uphc);
+                updateDashboard();
+            }
+
+            function updateTitles(state, dist, uphc) {
+                let title = "Session Site Summary";
+                if (uphc !== 'ALL') title = `UPHC Summary: ${uphc}`;
+                else if (dist !== 'ALL') title = `District Summary: ${dist}`;
+                else if (state !== 'ALL') title = `State Summary: ${state}`;
+                
+                document.getElementById('ss-report-title').textContent = title;
+                document.getElementById('ss-report-subtitle').textContent = `Based on ${filteredData.length} session sites monitored between ${inputDateStart.value} and ${inputDateEnd.value}`;
+            }
+
+            function updateDashboard() {
+                const total = filteredData.length;
+                document.getElementById('ss-kpi-total').textContent = total.toLocaleString();
+
+                const metrics = {
+                    adherence: { c: 0, d: 0 },
+                    supVisit: { c: 0, d: 0 },
+                    moicVisit: { c: 0, d: 0 },
+                    noMob: { c: 0, d: 0 },
+                    avd: { c: 0, d: 0 },
+
+                    headcount: { c: 0, d: 0 },
+                    dueList: { c: 0, d: 0 },
+                    uwinPlan: { c: 0, d: 0 },
+                    uwinLive: { c: 0, d: 0 },
+                    tdTrack: { c: 0, d: 0 },
+
+                    medEquip: { c: 0, d: 0 },
+                    hubCutter: { c: 0, d: 0 },
+                    supplies: { c: 0, d: 0 },
+                    iec: { c: 0, d: 0 },
+                    vaccineUnavail: { c: 0, d: 0 },
+
+                    anc: { c: 0, d: 0 },
+                    injProto: { c: 0, d: 0 },
+                    mrProto: { c: 0, d: 0 }
+                };
+
+                const categoryCounts = {};
+                const mobilizerTypeCounts = {};
+                const warningSites = [];
+                let heldCount = 0;
+                
+                const outreachTypes = [
+                    'other outreach public facility',
+                    'outreach session site at aam',
+                    'outreach session site in community',
+                    'outreach_session_site'
+                ];
+
+                filteredData.forEach(row => {
+                    let issues = [];
+                    const isHeld = isYes(row['B.3.Session Held ?']);
+                    if (isHeld) heldCount++;
+
+                    let broadCat = 'Fixed Session Site';
+                    const catRaw = row['B.1.Categorization of session site as per Microplan?'] || '';
+                    if (outreachTypes.includes(catRaw.trim().toLowerCase())) {
+                        broadCat = 'Outreach Session Site';
+                    }
+
+                    if (!isHeld) {
+                        broadCat = 'Session Not Held';
+                    }
+                    
+                    categoryCounts[broadCat] = (categoryCounts[broadCat] || 0) + 1;
+
+                    if (isHeld) {
+                        if (broadCat === 'Outreach Session Site') {
+                            metrics.adherence.d++;
+                            if (isYes(getVal(row, 'Session held at the same session site in the Mohalla'))) metrics.adherence.c++;
+
+                            metrics.supVisit.d++;
+                            if (isYes(getVal(row, 'supervisor visits during today'))) metrics.supVisit.c++;
+
+                            metrics.moicVisit.d++;
+                            if (isYes(getVal(row, 'moic in the last 3 months'))) metrics.moicVisit.c++;
+
+                            metrics.noMob.d++; 
+                            const mobVal = getVal(row, 'Mobilizers available as per microplan');
+                            if (mobVal && mobVal.toLowerCase() !== 'na') {
+                                mobilizerTypeCounts[mobVal] = (mobilizerTypeCounts[mobVal] || 0) + 1;
+                                if (mobVal.toLowerCase() === 'no mobilizer') {
+                                    metrics.noMob.c++; 
+                                    issues.push("No Mobilizer Available");
+                                }
+                            }
+
+                            metrics.avd.d++;
+                            const avdVal = getVal(row, 'who delivered vaccines');
+                            if (avdVal && avdVal.toUpperCase() === 'AVD') {
+                                metrics.avd.c++;
+                            } else if (avdVal) {
+                                issues.push(`Vaccine not delivered by AVD (${avdVal})`);
+                            }
+
+                            metrics.headcount.d++;
+                            if (isYes(getVal(row, 'headcount survey'))) metrics.headcount.c++;
+
+                            metrics.dueList.d++;
+                            if (isYes(getVal(row, 'due list available with anm')) || isYes(getVal(row, 'due list available with mobilizer'))) metrics.dueList.c++;
+                        }
+
+                        metrics.uwinPlan.d++;
+                        if (isYes(getVal(row, 'Planned on UWIN'))) metrics.uwinPlan.c++;
+                        
+                        metrics.uwinLive.d++;
+                        if (isYes(getVal(row, 'Realtime entry on UWIN'))) metrics.uwinLive.c++;
+
+                        metrics.tdTrack.d++;
+                        if (isYes(getVal(row, 'track due children for td-10'))) metrics.tdTrack.c++;
+
+                        metrics.medEquip.d++;
+                        const weighVal = getVal(row, 'weighing machine');
+                        const bpVal = getVal(row, 'bp machine');
+                        if (isYes(weighVal) && isYes(bpVal)) {
+                            metrics.medEquip.c++;
+                        } else {
+                            issues.push("Missing Basic Equipment (Weighing/BP)");
+                        }
+
+                        metrics.hubCutter.d++; 
+                        if (isYes(getVal(row, 'functional hub cutter'))) metrics.hubCutter.c++; 
+                        else issues.push("No Functional Hub Cutter");
+
+                        metrics.supplies.d++;
+                        const vitVal = getVal(row, 'vitamin a solution');
+                        const mcpVal = getVal(row, 'mcp/ ri card');
+                        if (isYes(vitVal) && isYes(mcpVal)) {
+                            metrics.supplies.c++;
+                        } else {
+                            issues.push("Missing Essential Supplies (Vit A/MCP)");
+                        }
+
+                        metrics.iec.d++;
+                        if (isYes(getVal(row, 'iec material displayed'))) metrics.iec.c++;
+
+                        metrics.anc.d++;
+                        if (isYes(getVal(row, 'anc services'))) metrics.anc.c++;
+
+                        metrics.injProto.d++;
+                        const injSite = getVal(row, 'selection of injection site');
+                        const injRoute = getVal(row, 'selection of injection route');
+                        if (isYes(injSite) && isYes(injRoute)) metrics.injProto.c++;
+
+                        metrics.mrProto.d++;
+                        const mrRoute = getVal(row, 'route of administration mr');
+                        let mrSuspect = getVal(row, 'identify'); 
+                        if (!mrSuspect) mrSuspect = getVal(row, 'how are mr suspect cases reported');
+                        
+                        let routeOk = isYes(mrRoute);
+                        let suspectOk = mrSuspect && !mrSuspect.toLowerCase().includes('not aware');
+                        if (routeOk && suspectOk) metrics.mrProto.c++;
+
+                        metrics.vaccineUnavail.d++;
+                        const vaxMap = {
+                            'G.2.': 'BCG', 'G.3.': 'BCG Diluent', 'G.4.': 'OPV', 'G.5.': 'RVV', 
+                            'G.6.': 'IPV', 'G.7.': 'Pentavalent', 'G.8.': 'DPT', 'G.9.': 'MR', 
+                            'G.10.': 'MR Diluent', 'G.11.': 'JE', 'G.12.': 'PCV', 'G.13.': 'Td'
+                        };
+                        let missingVaccines = [];
+                        for (let vk of Object.keys(vaxMap)) {
+                            let vVal = getVal(row, vk);
+                            if (vVal && String(vVal).trim().toLowerCase().startsWith('no')) {
+                                missingVaccines.push(vaxMap[vk]);
+                            }
+                        }
+                        
+                        if (missingVaccines.length > 0) {
+                            metrics.vaccineUnavail.c++;
+                            issues.push(`Vaccines Not Available: ${missingVaccines.join(', ')}`);
+                        }
+
+                        const unavailVal = getVal(row, 'vaccine been unavailable, and what is the reason');
+                        if (unavailVal && unavailVal.toLowerCase() !== 'none' && unavailVal.toLowerCase() !== 'na') {
+                            issues.push(`Unavailability Reason: ${unavailVal}`);
+                        }
+
+                    } else {
+                        issues.push("Session Not Held");
+                    }
+
+                    if (issues.length > 0) {
+                        warningSites.push({
+                            uphc: row['A.4. Name of UPHC/UCHC'] || '-',
+                            dist: row['A.2. Name of the District'] || '-',
+                            site: row['A.10.Name of Session Site'] || '-',
+                            ward: row['A.11.Ward/Sector Name'] || '-',
+                            anm: row['A.8.Name of ANM'] || '-',
+                            date: row['A.16. Date of visit (YYYY-MM-DD)'] || '-',
+                            lat: row['_A.15. Geo- tagging_latitude'],
+                            lng: row['_A.15. Geo- tagging_longitude'],
+                            held: isHeld,
+                            issues: issues.join(', ')
+                        });
+                    }
+                });
+
+                document.getElementById('ss-kpi-held').innerHTML = total ? `${((heldCount/total)*100).toFixed(1)}% <span class="text-sm font-medium opacity-75">(n=${heldCount}/${total})</span>` : '0%';
+
+                const calcPct = (m) => m.d ? `${((m.c / m.d) * 100).toFixed(1)}% <span class="text-sm font-medium opacity-75">(n=${m.c}/${m.d})</span>` : `0% <span class="text-sm font-medium opacity-75">(n=0/0)</span>`;
+
+                document.getElementById('ss-kpi-adherence').innerHTML = calcPct(metrics.adherence);
+                document.getElementById('ss-kpi-sup-visit').innerHTML = calcPct(metrics.supVisit);
+                document.getElementById('ss-kpi-moic-visit').innerHTML = calcPct(metrics.moicVisit);
+                document.getElementById('ss-kpi-no-mob').innerHTML = calcPct(metrics.noMob);
+                document.getElementById('ss-kpi-avd').innerHTML = calcPct(metrics.avd);
+
+                document.getElementById('ss-kpi-headcount').innerHTML = calcPct(metrics.headcount);
+                document.getElementById('ss-kpi-due-list').innerHTML = calcPct(metrics.dueList);
+                document.getElementById('ss-kpi-uwin-plan').innerHTML = calcPct(metrics.uwinPlan);
+                document.getElementById('ss-kpi-uwin-live').innerHTML = calcPct(metrics.uwinLive);
+                document.getElementById('ss-kpi-td-track').innerHTML = calcPct(metrics.tdTrack);
+
+                document.getElementById('ss-kpi-med-equip').innerHTML = calcPct(metrics.medEquip);
+                document.getElementById('ss-kpi-hub-cutter').innerHTML = calcPct(metrics.hubCutter);
+                document.getElementById('ss-kpi-supplies').innerHTML = calcPct(metrics.supplies);
+                document.getElementById('ss-kpi-iec').innerHTML = calcPct(metrics.iec);
+                document.getElementById('ss-kpi-vaccine-unavail').innerHTML = calcPct(metrics.vaccineUnavail);
+
+                document.getElementById('ss-kpi-anc').innerHTML = calcPct(metrics.anc);
+                document.getElementById('ss-kpi-inj-proto').innerHTML = calcPct(metrics.injProto);
+                document.getElementById('ss-kpi-mr-proto').innerHTML = calcPct(metrics.mrProto);
+
+                const warnBody = document.getElementById('ss-warning-table-body');
+                warnBody.innerHTML = '';
+                
+                if (warningSites.length === 0) {
+                    warnBody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-sm text-gray-500 italic text-center">Excellent! No critical issues found in the selected session sites.</td></tr>';
+                } else {
+                    warningSites.slice(0, 100).forEach(site => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-900">${site.uphc}<br><span class="text-gray-500 text-[10px]">${site.dist}</span></td>
+                            <td class="px-3 py-2 whitespace-nowrap font-medium text-gray-700">${site.site}<br><span class="text-gray-500 font-normal text-[10px]">Ward: ${site.ward}</span></td>
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-600">${site.anm}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-gray-600 font-mono">${site.date}</td>
+                            <td class="px-3 py-2 whitespace-normal text-red-600 font-semibold text-xs bg-red-50 rounded">${site.issues}</td>
+                        `;
+                        warnBody.appendChild(tr);
+                    });
+                }
+
+                const sortedCats = Object.entries(categoryCounts).sort((a,b) => b[1] - a[1]); 
+                renderChart('ss-categoryChart', 'doughnut', 
+                    sortedCats.map(c => c[0]),
+                    sortedCats.map(c => c[1]),
+                    ['#0f766e', '#f59e0b', '#dc2626'] 
+                );
+
+                const sortedMobs = Object.entries(mobilizerTypeCounts).sort((a,b) => b[1] - a[1]);
+                renderChart('ss-mobilizerChart', 'bar',
+                    sortedMobs.map(m => m[0]),
+                    sortedMobs.map(m => m[1]),
+                    ['#14b8a6']
+                );
+
+                updateMap(warningSites);
+            }
+
+            function renderChart(canvasId, type, labels, data, colors) {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                if (charts[canvasId]) charts[canvasId].destroy();
+
+                charts[canvasId] = new Chart(ctx, {
+                    type: type,
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: colors,
+                            borderWidth: 1,
+                            borderColor: '#ffffff'
+                        }]
+                    },
+                    plugins: [ChartDataLabels],
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false, 
+                        plugins: {
+                            legend: { 
+                                display: type !== 'bar', 
+                                position: 'right', 
+                                labels: { boxWidth: 12, font: { size: 10 } } 
+                            },
+                            datalabels: {
+                                color: type === 'doughnut' ? '#ffffff' : '#4b5563',
+                                font: { weight: 'bold', size: 12 },
+                                anchor: type === 'bar' ? 'end' : 'center',
+                                align: type === 'bar' ? 'top' : 'center',
+                                offset: type === 'bar' ? 4 : 0,
+                                formatter: (value) => value > 0 ? value : ''
+                            }
+                        },
+                        scales: type === 'bar' ? {
+                            y: { beginAtZero: true, ticks: { precision: 0 } }
+                        } : {}
+                    }
+                });
+            }
+
+            function initMap() {
+                if (!map) {
+                    map = L.map('ss-map').setView([20.5937, 78.9629], 5);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OpenStreetMap &copy; CARTO',
+                        maxZoom: 20
+                    }).addTo(map);
+                    markersLayer = L.featureGroup().addTo(map);
+                    window.ssMapInstance = map;
+                    setTimeout(() => map.invalidateSize(), 300);
+                }
+            }
+
+            function updateMap(warningSites) {
+                if (!map || !markersLayer) return;
+                markersLayer.clearLayers();
+                
+                const warningLookup = {};
+                warningSites.forEach(w => {
+                    if(w.lat && w.lng) warningLookup[`${w.lat}_${w.lng}`] = w;
+                });
+
+                filteredData.forEach(row => {
+                    const latStr = row['_A.15. Geo- tagging_latitude'];
+                    const lngStr = row['_A.15. Geo- tagging_longitude'];
+                    
+                    if (latStr && lngStr) {
+                        const lat = parseFloat(latStr);
+                        const lng = parseFloat(lngStr);
+                        
+                        if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+                            
+                            const key = `${latStr}_${lngStr}`;
+                            const warningInfo = warningLookup[key];
+                            
+                            let markerColor = '#10b981'; 
+                            let radius = 5;
+                            let zIndex = 0;
+                            let popupText = `<div class="text-sm"><b>Site:</b> ${row['A.10.Name of Session Site'] || 'N/A'}<br><b>UPHC:</b> ${row['A.4. Name of UPHC/UCHC'] || 'N/A'}<br><b class="text-green-600">Session Held (No Issues)</b></div>`;
+                            
+                            if (warningInfo) {
+                                if (!warningInfo.held) {
+                                    markerColor = '#dc2626'; 
+                                    radius = 7;
+                                    zIndex = 1000;
+                                    popupText = `<div class="text-sm"><b>Site:</b> ${warningInfo.site}<br><b>UPHC:</b> ${warningInfo.uphc}<br><b class="text-red-600">SESSION NOT HELD</b><br>Issues: ${warningInfo.issues}</div>`;
+                                } else {
+                                    markerColor = '#f59e0b'; 
+                                    radius = 6;
+                                    zIndex = 500;
+                                    popupText = `<div class="text-sm"><b>Site:</b> ${warningInfo.site}<br><b>UPHC:</b> ${warningInfo.uphc}<br><b class="text-orange-600">Warning Issues Detected</b><br>${warningInfo.issues}</div>`;
+                                }
+                            }
+
+                            const marker = L.circleMarker([lat, lng], {
+                                radius: radius,
+                                fillColor: markerColor,
+                                color: warningInfo ? '#000000' : '#ffffff',
+                                weight: warningInfo ? 2 : 1,
+                                opacity: 1,
+                                fillOpacity: warningInfo ? 1 : 0.7
+                            });
+
+                            marker.bindTooltip(popupText);
+
+                            if(zIndex > 0) marker.bringToFront();
+                            markersLayer.addLayer(marker);
+                        }
+                    }
+                });
+
+                if (markersLayer.getLayers().length > 0) {
+                    map.fitBounds(markersLayer.getBounds(), { padding: [30, 30], maxZoom: 15 });
+                }
+            }
+
+            function handleShapefileUpload(event) {
+                const file = event.target.files[0];
+                if (!file || !map) return;
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    shp(e.target.result).then(function(geojson) {
+                        if (shpLayer) map.removeLayer(shpLayer);
+                        shpLayer = L.geoJSON(geojson, {
+                            style: function() {
+                                return { color: '#0f766e', weight: 2, opacity: 0.8, fillOpacity: 0.1, fillColor: '#14b8a6' };
+                            },
+                            onEachFeature: function(feature, layer) {
+                                if (feature.properties) {
+                                    const namePropKey = Object.keys(feature.properties).find(k => 
+                                        k.toLowerCase().includes('name') || k.toLowerCase().includes('uphc')
+                                    );
+                                    if (namePropKey && feature.properties[namePropKey]) {
+                                        layer.bindTooltip(`<b>Boundary:</b> ${feature.properties[namePropKey]}`, {sticky: true});
+                                    }
+                                }
+                            }
+                        }).addTo(map);
+                        map.fitBounds(shpLayer.getBounds());
+                    }).catch(function(err) {
+                        alert('Error loading shapefile: ' + err.message);
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+                event.target.value = ''; 
+            }
+        };
+
+        // Initialize Module 2
+        initSS();
+
+    </script>
+</body>
+</html>
